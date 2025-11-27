@@ -36,17 +36,23 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(controller.parameters(), lr=1e-3)
 
+    num_epochs = 15  # WAS 5
+    optimizer = optim.Adam(controller.parameters(), lr=0.005)  # WAS 0.001
+
     print("[ANEE] Training Controller...")
 
-    for epoch in range(5):
+    for epoch in range(num_epochs):
+        epoch_loss = 0
         for batch_states, batch_actions in loader:
             optimizer.zero_grad()
             logits = controller.net(batch_states)
             loss = criterion(logits, batch_actions)
             loss.backward()
             optimizer.step()
+            epoch_loss += loss.item()
 
-        print(f"Epoch {epoch+1} Loss: {loss.item():.4f}")
+        # Print average loss
+        print(f"Epoch {epoch + 1} Loss: {epoch_loss / len(loader):.4f}")
 
     torch.save(controller.state_dict(), save_path)
     print(f"[ANEE] Saved trained controller to {save_path}")

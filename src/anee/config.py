@@ -9,10 +9,7 @@ class ANEEConfig:
     exit_budget_threshold: float = 0.1
     controller_type: str = "heuristic"
 
-    # CHANGE HERE: 7 -> 5
-    # Removed entropy(1) and max_prob(1).
-    # Remaining: [h_norm, delta_norm, var, layer_frac, budget]
-    state_dim: int = 5
+    state_dim: int = 6
 
     controller_hidden_dim: int = 32
     controller_path: Optional[str] = None

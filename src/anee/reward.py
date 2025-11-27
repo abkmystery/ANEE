@@ -1,52 +1,54 @@
 import torch
 import torch.nn.functional as F
 
+
 class ANEERewardEngine:
-    def __init__(self, lambda_efficiency=2.0, lambda_quality=1.0, lambda_compliance=5.0):
-        self.lambda_eff = float(lambda_efficiency)
-        self.lambda_qual = float(lambda_quality)
-        self.lambda_comp = float(lambda_compliance) # New Penalty Weight
+    def __init__(self, lambda_efficiency=2.0, lambda_penalty=10.0, lambda_compliance=5.0):
+        self.lambda_eff = lambda_efficiency  # Reward for saving (if quality is good)
+        self.lambda_pen = lambda_penalty  # Penalty for bad quality
+        self.lambda_comp = lambda_compliance  # Penalty for ignoring budget
 
     def compute_reward(
-        self,
-        early_exit_logits: torch.Tensor,
-        full_model_logits: torch.Tensor,
-        layers_used: int,
-        total_layers: int,
-        target_budget: float, # New Argument
+            self,
+            early_exit_logits: torch.Tensor,
+            full_model_logits: torch.Tensor,
+            layers_used: int,
+            total_layers: int,
+            target_budget: float,
     ):
-        # 1. Quality (KL Divergence) with CLIPPING
+        # 1. Calculate KL Divergence (The Quality Meter)
         student_log_probs = F.log_softmax(early_exit_logits[:, -1, :], dim=-1)
         teacher_probs = F.softmax(full_model_logits[:, -1, :], dim=-1)
         kl = F.kl_div(student_log_probs, teacher_probs, reduction="batchmean")
+        kl_val = kl.item()
 
-        # INNOVATION: Tanh Clipping
-        # Maps infinite loss to range [-1, 0] roughly
-        # Or simple clamping. Let's use simple clamping to prevent gradients exploding.
-        kl_clamped = torch.clamp(kl, min=0.0, max=5.0)
-
-        quality_reward = -kl_clamped
-
-        # 2. Efficiency (Raw Savings)
+        # 2. Calculate Savings
         actual_cost = layers_used / float(total_layers)
         savings = 1.0 - actual_cost
-        efficiency_reward = torch.tensor(savings, device=early_exit_logits.device)
 
-        # 3. Budget Compliance (The New Logic)
-        # If we used MORE than the budget, punish heavily.
-        # If we used LESS, that's fine (efficiency reward covers it).
-        over_budget = max(0.0, actual_cost - target_budget)
-        compliance_penalty = over_budget * self.lambda_comp
+        # 3. THE GATE (Your Idea)
+        # Threshold: 0.1 is roughly "Very minimal difference"
+        QUALITY_THRESHOLD = 0.5
 
-        # Total Reward
-        total_reward = (
-            (self.lambda_qual * quality_reward) +
-            (self.lambda_eff * efficiency_reward) -
-            compliance_penalty
-        )
+        if kl_val > QUALITY_THRESHOLD:
+            # ZONE A: GIBBERISH
+            # Action: Heavy Punishment. Zero reward for efficiency.
+            # We punish KL heavily to force it back to "Process All"
+            reward = - (kl_val * self.lambda_pen)
 
-        return total_reward, {
-            "qual": quality_reward.item(),
-            "eff": efficiency_reward.item(),
-            "comp": compliance_penalty
+            # Note: We do NOT penalize budget compliance here.
+            # If the text is bad, priority #1 is fixing text, not fixing budget.
+        else:
+            # ZONE B: UNDERSTANDABLE
+            # Action: Now we pay for Efficiency.
+            reward = (savings * self.lambda_eff)
+
+            # Apply Budget Compliance Penalty only if text is good
+            over_budget = max(0.0, actual_cost - target_budget)
+            reward -= (over_budget * self.lambda_comp)
+
+        return torch.tensor(reward, device=early_exit_logits.device, requires_grad=True), {
+            "kl": kl_val,
+            "savings": savings,
+            "zone": "GOOD" if kl_val <= QUALITY_THRESHOLD else "BAD"
         }

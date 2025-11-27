@@ -37,8 +37,7 @@ def collect_heatmap_data(model, tokenizer, prompt, budget):
             past_key_values = [None] * len(model.layers)
             model_input = generated
         else:
-            # ROBUST FIX: Find the first non-None cache to get the length
-            # If a layer was exited/skipped improperly, its cache might be None.
+            # Robust Cache Check
             valid_cache = next((kv for kv in past_key_values if kv is not None), None)
             if valid_cache is not None:
                 past_length = valid_cache[0].size(-2)
@@ -74,15 +73,24 @@ def collect_heatmap_data(model, tokenizer, prompt, budget):
             cost = layers_left / float(model.total_layers)
             urgency = curr_budget - cost
 
-            state = torch.tensor([[h_norm, delta_norm, var, urgency, curr_budget]],
+            # --- FIX: ADD LAYER FRACTION (GPS) ---
+            layer_fraction = layer_idx / float(model.total_layers)
+
+            # State Vector: [Norm, Delta, Var, Urgency, Budget, Layer_Frac]
+            state = torch.tensor([[h_norm, delta_norm, var, urgency, curr_budget, layer_fraction]],
                                  dtype=torch.float32, device=device)
 
             # DECIDE
             decision = model.controller.decide(layer_idx, curr_budget, state)
             action = decision['action']
 
+            # --- SAFETY OVERRIDE (Match Wrapper Logic) ---
+            if layer_idx >= (model.total_layers - 2):
+                action = "PROCESS"
+            # ---------------------------------------------
+
             if action == "PROCESS":
-                mask.append(1)  # Dark Blue
+                mask.append(1)
                 outputs = layer_module(hidden_states, layer_past=layer_past, use_cache=True)
                 hidden_states = outputs[0]
 
@@ -95,14 +103,14 @@ def collect_heatmap_data(model, tokenizer, prompt, budget):
                 curr_budget = max(0.0, curr_budget - decision['layer_cost'])
 
             elif action == "SKIP":
-                mask.append(0)  # White
+                mask.append(0)
 
                 # Partial Skip
                 attn = layer_module.attn
                 head_dim = attn.head_dim
                 query, key, value = attn.c_attn(hidden_states).split(attn.split_size, dim=2)
 
-                # Robust Reshape
+                # Use wrapper helper
                 if hasattr(model, '_manual_split_heads'):
                     key = model._manual_split_heads(key, attn.num_heads, head_dim)
                     value = model._manual_split_heads(value, attn.num_heads, head_dim)
@@ -119,9 +127,8 @@ def collect_heatmap_data(model, tokenizer, prompt, budget):
                 curr_budget = max(0.0, curr_budget - decision['layer_cost'])
 
             elif action == "EXIT":
-                mask.append(0.5)  # Grey
+                mask.append(0.5)
                 mask.extend([0.5] * (model.total_layers - len(mask)))
-                # Fill remaining cache with None
                 for _ in range(model.total_layers - len(present_key_values)):
                     present_key_values.append(None)
                 break
@@ -129,12 +136,11 @@ def collect_heatmap_data(model, tokenizer, prompt, budget):
         layer_activity.append(mask)
         past_key_values = present_key_values
 
-        # Decode next token (SAMPLING)
+        # Decode
         h_final = model.ln_f(hidden_states)
         logits = model.lm_head(h_final)
         next_token_logits = logits[:, -1, :]
 
-        # Temp & Sampling
         next_token_logits = next_token_logits / 0.8
         probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1)
@@ -152,7 +158,7 @@ def main():
         model_name="gpt2",
         controller_type="learned",
         controller_path="controllers/controller_rl.pt",
-        state_dim=5
+        state_dim=6  # UPDATE: Ensure this matches config/wrapper
     )
     model = ANEEWrapper(config)
     tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
@@ -166,8 +172,6 @@ def main():
     plt.figure(figsize=(12, 6))
     sns.heatmap(activity, cmap="Blues", cbar=False, linewidths=0.5, linecolor='gray')
 
-    # Formatting
-    # Use only first 15 tokens if generated list is long
     display_tokens = tokens[:15]
     display_activity = activity[:, :15]
 
