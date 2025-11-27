@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.build/
+dist/
+.eggs/
+
+# Virtual envs
+venv/
+.env/
+.env*/
+
+# IDEs / Editors
+.idea/
+.vscode/
+*.iml
+
+# Jupyter / Experiments
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs / temp
+*.log
+*.tmp
+*.DS_Store
+
+# HuggingFace / cache (if inside repo – usually it's in home dir)
+cache/
