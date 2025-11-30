@@ -92,9 +92,10 @@ from anee.utils import estimate_gpt2_flops, calculate_savings
 def verbose_generate(model, tokenizer, prompt, budget=1.0, max_tokens=10):
     print(f"\n--- GENERATION (Budget: {budget}) ---")
 
-    # 1. Get Baseline FLOPs (Static for GPT-2)
-    # 1024 is standard context, but doesn't matter for per-token estimation
-    flops_profile = estimate_gpt2_flops(None, seq_len=1)
+
+    # 1. Get Baseline FLOPs (DYNAMICALLY)
+    flops_profile = estimate_gpt2_flops(model.base_model.config, seq_len=1)
+
 
     if hasattr(model.controller, "reset_rl_trace"):
         model.controller.reset_rl_trace()
@@ -140,10 +141,10 @@ def verbose_generate(model, tokenizer, prompt, budget=1.0, max_tokens=10):
 
 def main():
     config = ANEEConfig(
-        model_name="gpt2",
+        model_name="gpt2-xl",
         controller_type="learned",
         controller_path="controllers/controller_rl.pt",
-        state_dim=6,  # Ensure this matches your current setup
+        state_dim=6,
     )
 
     model = ANEEWrapper(config)

@@ -1,183 +1,154 @@
-# ANEE v0.3 — Adaptive Neural Execution Engine
+ANEE: Adaptive Neural Execution Engine
 
-**Dynamic Sparse Inference for Pre-Trained Transformers**
+Dynamic sparse inference for autoregressive Transformers
 
-ANEE is a lightweight framework for **token-wise, layer-wise adaptive computation** in transformer language models.
-Instead of running every layer for every token, ANEE learns how to **allocate compute dynamically**, reducing unnecessary computation while preserving output quality.
+ANEE is a lightweight research library that adds per-token adaptive computation to autoregressive Transformer models (GPT-2 + other GPT-style open models). It uses a profiler + learned controller to skip redundant layers, while keeping the KV-cache aligned, enabling coherent generation even when large portions of the network are bypassed.
 
-ANEE wraps existing HuggingFace models (e.g., GPT-2) without modifying their weights.
+ANEE has been tested on GPT-2 small, GPT-2 medium, GPT-2 large, and GPT-2-XL, achieving up to 50–55% theoretical FLOPs savings on large models at low compute budgets.
 
----
+Key Features
+✔ Dynamic Layer Skipping (Per Token)
 
-## 🔧 Key Capabilities
+ANEE decides, for every token, which layers are necessary and which can be skipped.
 
-### **• Dynamic Layer Skipping**
+✔ Profiler-Driven State
 
-ANEE evaluates each transformer block at inference time and decides whether to:
+Each layer is evaluated using:
 
-* **PROCESS** — run full attention + MLP
-* **SKIP** — bypass computation for that layer
-* **EXIT** — terminate further processing (supported)
+entropy
 
-This produces **sparse execution patterns** that vary across tokens.
+hidden-state L2 norm
 
----
+delta-norm
 
-### **• RL-Trained Controller**
+activation variance
 
-A small neural controller receives a per-layer state vector containing:
+remaining compute budget
 
-* entropy of logits
-* hidden-state norms
-* delta-norms
-* variance
-* layer position
-* remaining budget
+depth position
 
-It learns policies via:
+These form the controller’s state vector.
 
-1. **Supervised warm-start** (from heuristic traces)
-2. **Reinforcement learning** with a reward balancing:
+✔ Safe Partial KV-Skipping
 
-   * similarity to full model (KL divergence)
-   * compute savings
-   * budget adherence
+Skipped layers still update the KV-cache (keys/values only), keeping attention alignment intact while avoiding heavy matrix multiplications.
 
----
+✔ RL or Heuristic Controller
 
-### **• Budget-Aware Inference**
+Use:
 
-Users provide an `energy_budget` in `[0,1]`.
-The controller adjusts its behavior per token to meet the budget target while maintaining model output quality.
+a simple heuristic, or
 
----
+a learned controller trained via REINFORCE.
 
-### **• Visual Execution Maps**
+✔ Plug-in Model Adapters (Extensible)
 
-ANEE includes tooling to visualize:
+Current adapters:
 
-* token-by-layer skip/process patterns
-* per-token compute usage
-* overall savings
-* effective depth profiles
+GPT-2 family (all sizes)
 
-These “execution heatmaps” help interpret which layers the model relies on.
+Ready for extension to GPT-J, LLaMA, Falcon, Mistral (via model adapters)
 
----
+Install
+pip install anee
 
-### **• Model-Agnostic Design**
+Quick Start
+import torch
+from transformers import GPT2TokenizerFast
+from anee import ANEEConfig
+from anee.wrapper import ANEEWrapper
 
-The wrapper manually unrolls transformer layers and is structured for easy adaptation to other decoder-only architectures beyond GPT-2.
+config = ANEEConfig(model_name="gpt2-xl", energy_budget=0.2)
+model = ANEEWrapper(config).eval()
 
----
+tokenizer = GPT2TokenizerFast.from_pretrained("gpt2-xl")
 
-## 📦 Repository Structure
+text = model.generate(
+    tokenizer=tokenizer,
+    prompt="The future of AI",
+    max_new_tokens=30,
+)
 
-```
-anee/
-│
-├── wrapper.py              # Core dynamic execution engine
-├── controller.py           # Heuristic + learned controllers
-├── profiler.py             # Layer-level state feature extractor
-├── reward.py               # RL reward (quality + efficiency)
-├── utils.py                # FLOPs proxy utilities
-├── config.py               # ANEE configuration
-│
-├── experiments/
-│   ├── train_controller.py
-│   ├── train_controller_rl.py
-│   ├── collect_traces.py
-│   ├── 01_sanity_check.py
-│   ├── visualize_heatmap.py
-```
+print(text)
 
----
+How ANEE Works
 
-## 🚀 Getting Started
+For each token, ANEE:
 
-### Install
+Profiles the hidden states using:
+entropy, max-softmax probability, L2 norm, delta-norm, variance, and remaining budget
 
-```bash
-pip install -e .
-```
+Builds a controller state vector
 
-### Warm-start Controller
+Passes the state into an MLP controller to choose:
 
-```bash
-python experiments/train_controller.py
-```
+PROCESS: run the full layer
 
-### RL Fine-Tuning
+SKIP: update KV-cache only
 
-```bash
-python experiments/train_controller_rl.py
-```
+EXIT: optional early stop
 
-### Quick Test
+Maintains safe KV-cache alignment
 
-```bash
-python experiments/01_sanity_check.py
-```
+Produces logits through the model’s final LN + LM head
 
-### Generate Heatmap Visualization
+FLOPs Savings Example (GPT-2-XL)
+Budget = 0.2
+Layers executed per token: ~19–21 of 48
+Layers skipped per token: 28–29
+Average theoretical savings: 53–55%
 
-```bash
-python experiments/visualize_heatmap.py
-```
 
----
+The largest models show the strongest redundancy and highest savings.
 
-## 📈 Performance Snapshot (GPT-2 Small)
+Project Structure
+src/anee/
+    wrapper.py          – core KV-safe executor
+    controller.py       – heuristic + learned controller
+    profiler.py         – entropy/norm/variance metrics
+    utils.py            – FLOPs estimates, helpers
+    reward.py           – RL reward functions
+    config.py           – configuration dataclass
+experiments/
+    01_sanity_check.py  – simple text generation test
+    visualize_heatmap.py – layer-usage heatmaps
+    train_controller.py – supervised controller (optional)
+    train_controller_rl.py – RL controller training
 
-At moderate budgets, ANEE typically:
+Supported Models
+Model	Status
+GPT-2 (all sizes)	✔ Full support
+GPT-J 6B	☐ Adapter planned
+LLaMA / Mistral	☐ Adapter planned
+Falcon	☐ Adapter planned
 
-* executes ~6–9 of 12 layers per token
-* achieves **~20–30% effective compute reduction**
-* maintains coherent generation
-* shows consistent “sparse middle, dense edges” execution profiles
+Adapters can be added by implementing a ModelAdapter subclass.
 
-Lower budgets naturally trade off output quality.
+Why ANEE?
 
----
+Transformers waste computation on many tokens.
+ANEE reduces theoretical FLOPs while preserving sequence coherence by:
 
-## 🔬 Intended Use & Applications
+identifying redundant layers
 
-ANEE provides a clean, transparent platform for research in:
+skipping only semantic-middle layers
 
-* dynamic depth / adaptive inference
-* efficient transformer execution
-* compute-aware LLM routing
-* per-token sparsity patterns
-* RL-driven execution policies
+preserving structure and output formatting layers
 
-It is well-suited for experimentation, teaching, and further development.
+This creates a “Sandwich Pattern” of low-middle-low compute which appears consistently across models.
 
----
+Citation
 
-## 📄 License
+If ANEE is useful in your work:
 
-APACHE 2.0
-
----
-
-## Citation
-
-If you use ANEE in your research, please cite:
-
-**Ahmed Bin Khalid. (2025). ANEE: Adaptive Neural Execution Engine. Zenodo.**  
-DOI: https://doi.org/10.5281/zenodo.17741880
-
-```bibtex
-@software{anee,
-  author       = {Ahmed Bin Khalid},
-  title        = {ANEE: Adaptive Neural Execution Engine},
-  year         = {2025},
-  publisher    = {Zenodo},
-  doi          = {10.5281/zenodo.17741880},
-  url          = {https://doi.org/10.5281/zenodo.17741880}
+@software{anee2025,
+  author = {Ahmed Bin Khalid},
+  title  = {ANEE: Adaptive Neural Execution Engine},
+  year   = {2025},
+  doi    = {10.5281/zenodo.17741880},
+  note   = {Dynamic sparse inference for autoregressive Transformers}
 }
 
-```
+License
 
----
-
+Apache 2.0

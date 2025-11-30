@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anee"
-version = "0.3"
+version = "0.4"
 description = "Adaptive Neural Execution Engine – Dynamic sparse inference for pre-trained Transformers."
 readme = "README.md"
 requires-python = ">=3.8"
